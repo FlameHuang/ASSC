@@ -1,0 +1,962 @@
+---
+title: "IVD_fig4_plot"
+author: "HuangFei"
+date: "2020/12/2"
+output: html_document
+---
+
+## load dependence
+```{r,warning=FALSE}
+need_pkgs <- c('Seurat','cowplot', 'slingshot','ggpubr',
+               'data.table', 'reticulate','ggplot2','ggsci')
+
+for(i in need_pkgs){
+  #if(!require(i, character.only = T)) {
+   # install.packages(i)
+    require(i, quietly = T, character.only = T)
+   # } 
+}
+```
+
+```{r,echo=FALSE}
+library(ggplot2)
+my_theme <- theme(plot.title = element_text(hjust = 0.5, size = 18),
+                  #legend.position = 'right',
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=15),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15),
+                  panel.border = element_blank(),
+                  axis.line.x = element_line(size=0.25, color="black"),
+                  axis.line.y = element_line(size=0.25, color="black"),
+                  panel.grid.minor.x = element_blank(), panel.grid.minor.y = element_blank(),
+                  panel.grid.major.x = element_blank(), panel.grid.major.y = element_blank(),
+                  panel.background = element_rect(fill='white'),
+                  legend.key=element_blank(),
+                  strip.text.x = element_text(size=15),
+                  strip.text.y = element_text(size=15),
+                  strip.background = element_rect(colour = 'white', fill = 'white'))
+```
+
+```{r}
+load('~/Project/Organoid/result/rdata/Mutiple_organoid_EN_and_RGC_matrix.RData')
+SC_organoid = readRDS('~/Project/Organoid/result/rdata/IVD_organoid_200_min_gene_20MT_Seurat_obj.rds')
+
+meta = SC_organoid@meta.data
+
+RG_cells = rownames(meta[grep('RG|AS',meta$CellType),])
+IVD.RG_mat = SC_organoid[,RG_cells]@assays$RNA@data
+dim(IVD.RG_mat)
+
+EN_cells = rownames(meta[grep('Neuron',meta$CellType),])
+IVD.EN_mat = SC_organoid[,EN_cells]@assays$RNA@data
+dim(IVD.EN_mat)
+
+plot.colors = pal_jama()(5)[-1]
+```
+
+### brain region markers
+```{r}
+cortex = c('CUX1', 'BRN2','BCL11B', 'FOXP2', 'EMX1', 'AUTS2', 'TSHZ2', 'LMO4')
+hippocampus = c('NRP2','FZD9','PROX1','ZBTB20')
+hypothalamus = c('RAX1', 'POMC', 'VIP', 'OXT', 'NPY', 'OTP')
+thalamus = c('TCF7L2', 'GBX2')
+cerebellum = c('ATOH1', 'KIRREL2', 'PTF1A', 'SKOR2')
+
+
+```
+
+
+```{r}
+pdf('~/Project/Organoid/figure/to_pub/region/Cortex_markers.pdf',9,7.5)
+FeaturePlot(SC_organoid,c(cortex,'POU3F2'),
+            order = T, ncol = 3,cols = c('lightgrey','#FF4500'))
+
+dev.off()
+```
+
+```{r}
+pdf('~/Project/Organoid/figure/to_pub/region/Cerebellum_markers.pdf',3.5,3)
+FeaturePlot(SC_organoid,c(cerebellum),
+            order = T, ncol = 1,cols = c('lightgrey','#FF4500'))
+
+dev.off()
+```
+
+```{r}
+pdf('~/Project/Organoid/figure/to_pub/region/Hippocampus_markers.pdf',6,5)
+FeaturePlot(SC_organoid,c(hippocampus),
+            order = T, ncol = 2,cols = c('lightgrey','#FF4500'))
+
+dev.off()
+```
+
+```{r}
+pdf('~/Project/Organoid/figure/to_pub/region/Hypothalamus_markers.pdf',7.5,2.5)
+FeaturePlot(SC_organoid,c(hypothalamus),
+            order = T, ncol = 3,cols = c('lightgrey','#FF4500'))
+
+dev.off()
+```
+
+```{r}
+pdf('~/Project/Organoid/figure/to_pub/region/Thalamus_markers.pdf',6,2.5)
+FeaturePlot(SC_organoid,c(thalamus),
+            order = T, ncol = 3,cols = c('lightgrey','#FF4500'))
+
+dev.off()
+```
+
+```{r}
+exprMatrix = as.matrix(SC_organoid@assays$RNA@data)
+
+### obtain UMAP projection to plot
+cellsUMAP = Embeddings(object = SC_organoid, reduction = "umap")
+
+cellsTsne = Embeddings(object = SC_organoid, reduction = "tsne")
+
+cellsReduction = as.data.frame(cbind(cellsUMAP, cellsTsne))
+cellsReduction$SampleID = rownames(cellsReduction)
+
+geneSets = list()
+geneSets[['cortex']] = cortex
+geneSets[['hypothalamus']] = hypothalamus
+geneSets[['thalamus']] = thalamus
+geneSets[['hippocampus']] = hippocampus
+```
+
+
+## 4. run AUCell to calculate AUC scores of marker genes' signature
+```{r}
+library(AUCell)
+thrP = 0.01
+PopPer = 0.25
+cells_rankings <- AUCell_buildRankings(exprMatrix)
+
+cells_AUC <- AUCell_calcAUC(geneSets, cells_rankings, aucMaxRank=nrow(cells_rankings)*0.05)
+
+set.seed(123)
+cells_assignment <- AUCell_exploreThresholds(cells_AUC, plotHist=TRUE, nCores=1, 
+                                             assign=TRUE,thrP=thrP,smallestPopPercent = PopPer)
+
+
+selectedThresholds <- getThresholdSelected(cells_assignment)
+```
+
+### plot the AUC scores on UMAP projection
+#### We assigned celltypes to the cells holding the AUC scors over thershold !
+```{r,fig.width=5.5,fig.height=4.5}
+pdf('~/Project/Organoid/figure/to_pub/region/Brain_region_identification.pdf',5,4.5)
+for(geneSetName in names(selectedThresholds)[-2]){
+  cutoff = selectedThresholds[geneSetName]
+  if(cutoff<0.1){
+    cutoff = cutoff*2
+  }
+  # Split cells according to their AUC value for the gene set
+  passThreshold <- getAUC(cells_AUC)[geneSetName,] >  cutoff
+  if(sum(passThreshold) >0 )
+  {
+    aucSplit <- split(getAUC(cells_AUC)[geneSetName,], passThreshold)
+    
+    cellsReduction$AUC = getAUC(cells_AUC)[geneSetName,]
+    
+    passed = names(passThreshold[passThreshold>0])
+    cellsReduction$Identification = 'No'
+    cellsReduction[passed,]$Identification = 'YES'
+    
+    table(cellsReduction$Identification)
+    # Plot
+    #plot(cellsReduction[order(cellsReduction$AUC),1:2], main=geneSetName,
+    #sub="Pink/red cells pass the threshold",
+    #col=cellColor[rownames(cellsReduction[order(cellsReduction$AUC),])], pch=16) 
+    
+    
+     umap_cell = ggplot(cellsReduction[order(cellsReduction$AUC),],
+                        aes(x=UMAP_1,y=UMAP_2,col=AUC))+
+      geom_point()+scale_color_gradient(low = 'lightgrey', high = '#FF4500') +my_theme+
+      ggtitle(paste0(geneSetName,'\ncutoff: > ',cutoff))
+     
+   
+     umap_ident =  ggplot(cellsReduction[order(cellsReduction$AUC),], aes(x=UMAP_1,y=UMAP_2,col=Identification))+
+      geom_point(size=0.8)+scale_color_manual(values = c('lightgrey','#E64B35FF')) + my_theme+
+      ggtitle(paste0(geneSetName,'\ncutoff: > ',cutoff))
+     
+    print(umap_cell)
+    print(umap_ident)
+  }
+}  
+dev.off()
+```
+
+
+```{r}
+load('~/Project/Organoid/result/rdata/Integrate_IVD_and_3_hCO_dataset_list.RData')
+names(organoid.list)
+
+pdf('~/Project/Organoid/figure/Integration/Dorsomedial telencephalon gene in IVD.pdf',7,6)
+FeaturePlot(SC_organoid,c('NFIA','NFIB','RORB','LHX9'),order = T)
+FeaturePlot(SC_organoid,c('EMX1','EMX2','LHX2','LHX9'),order = T)
+FeaturePlot(SC_organoid,c('LMO3','LMO4','LEF1','LMX1A'),order = T)
+dev.off()
+
+pdf('~/Project/Organoid/figure/Integration/Dorsomedial telencephalon gene in hCOs.pdf',7,6)
+FeaturePlot(organoid.list[[2]],c('NFIA','NFIB','RORB','LHX9'),order = T)
+FeaturePlot(organoid.list[[3]],c('NFIA','NFIB','RORB','LHX9'),order = T)
+FeaturePlot(organoid.list[[2]],c('EMX1','EMX2','LHX2','LHX9'),order = T)
+FeaturePlot(organoid.list[[3]],c('EMX1','EMX2','LHX2','LHX9'),order = T)
+FeaturePlot(organoid.list[[2]],c('LMO3','LMO4','LEF1','LMX1A'),order = T)
+FeaturePlot(organoid.list[[3]],c('LMO3','LMO4','LEF1','LMX1A'),order = T)
+dev.off()
+```
+
+```{r}
+meta = SC_organoid@meta.data
+meta[grep('BRC',meta$CellType),]$CellType = 'BRC/CBC'
+meta[grep('Ependymal',meta$CellType),]$CellType = 'Ependyma'
+SC_organoid@meta.data = meta
+```
+
+
+```{r,fig.width=9,fig.height=7.5}
+
+Vln <-VlnPlot(SC_organoid, c('OTX2','RSPO3','PAX6','TTR','KRT18','NME5','LUM','DCN','DLK1'),
+        ncol = 3, group.by = 'CellType', pt.size = 0.05)
+
+FP = FeaturePlot(SC_organoid,c('OTX2','RSPO3','PAX6','TTR','KRT18','NME5','LUM','DCN','DLK1'),
+            order = T, ncol = 3,cols = c('lightgrey','#FF4500'))
+
+Vln
+FP
+
+pdf('~/Project/Organoid/figure/to_pub/fig2/Choroid plexus markers expression pattern in IVD.pdf',9,7.5)
+Vln
+FP
+dev.off()
+```
+
+```{r,fig.width=9,fig.height=6}
+Vln <-VlnPlot(SC_organoid, c(paste0('CLDN',c(1:3,5)),'LY6E','INS','PENK'),
+        ncol = 3, group.by = 'CellType', pt.size = 0.05)
+
+FP = FeaturePlot(SC_organoid,c(paste0('CLDN',c(1:3,5)),'LY6E','INS','PENK'),
+            order = T, ncol = 3,cols = c('lightgrey','#FF4500'))
+
+Vln
+FP
+
+pdf('~/Project/Organoid/figure/to_pub/fig2/Choroid plexus brain localization markers in IVD.pdf',9,6)
+Vln
+FP
+dev.off()
+```
+
+```{r,fig.width=7.5,fig.height=6}
+Vln <-VlnPlot(SC_organoid, c(paste0('CLDN',c(1:3,5))),
+        ncol = 2, group.by = 'CellType', pt.size = 0.05)
+
+FP = FeaturePlot(SC_organoid,c(paste0('CLDN',c(1:3,5))),
+            order = T, ncol = 2,cols = c('lightgrey','#FF4500'))
+
+Vln
+FP
+
+pdf('~/Project/Organoid/figure/to_pub/fig2/Choroid plexus claudins markers in IVD.pdf',7.5,6)
+Vln
+FP
+dev.off()
+```
+
+```{r,fig.height=7}
+library(clusterProfiler)
+library(DOSE)
+
+EN_DEG[,ENTREZ_ID:=mapIds(org.Hs.eg.db, keys = gene_name, keytype = 'SYMBOL', column = 'ENTREZID')]
+
+
+ego <- enrichGO(gene          = EN_DEG[Group=='IVD']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "CC",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+ego = simplify(ego)
+length(ego@result$Description)
+
+cc = dotplot(ego, showCategory = 31,title='GO (CC)') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+ego.bp <- enrichGO(gene          = EN_DEG[Group=='IVD']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+ego.bp = simplify(ego.bp)
+length(ego.bp@result$Description)
+
+bp = dotplot(ego.bp, showCategory = 30,title='GO (BP)') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+
+ego.mf <- enrichGO(gene          = EN_DEG[Group=='IVD']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+ego.mf = simplify(ego.mf)
+length(ego.mf@result$Description)
+
+mf = dotplot(ego.mf, showCategory = 3,title='GO (MF)') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+bp
+mf
+cc
+```
+
+```{r,fig.height=7}
+library(clusterProfiler)
+library(DOSE)
+
+EN_DEG[,ENTREZ_ID:=mapIds(org.Hs.eg.db, keys = gene_name, keytype = 'SYMBOL', column = 'ENTREZID')]
+
+
+hCO.cc <- enrichGO(gene          = EN_DEG[Group=='hCO']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "CC",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,
+        readable      = TRUE)
+
+hCO.cc = simplify(hCO.cc)
+length(hCO.cc@result$Description)
+
+cc = dotplot(hCO.cc, showCategory = 31,title='GO (CC)') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+hCO.bp <- enrichGO(gene          = EN_DEG[Group=='hCO']$ENTREZ_ID,
+                
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+        readable      = TRUE)
+
+hCO.bp = simplify(hCO.bp)
+length(hCO.bp@result$Description)
+
+bp = dotplot(hCO.bp, showCategory = 30,title='GO (BP)') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+
+hCO.mf <- enrichGO(gene          = EN_DEG[Group=='hCO']$ENTREZ_ID,
+                
+                OrgDb         = org.Hs.eg.db,
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+        readable      = TRUE)
+
+hCO.mf = simplify(hCO.mf)
+length(hCO.mf@result$Description)
+
+mf = dotplot(hCO.mf, showCategory = 3,title='GO (MF)') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+bp
+mf
+cc
+```
+```{r}
+IBD.bp = as.data.table(ego.bp@result)[,Group:='IVD']
+hCO.bp = as.data.table(hCO.bp@result)[,Group:='hCO']
+```
+
+```{r}
+GO.bp = rbind(IBD.bp, hCO.bp)
+GO.bp
+GO.bp[grep('hypoxia|glu',Description)][,.(Description,pvalue,Group)]
+GO.bp[grep('neuron projection|axonogenesis|synapse',Description)][,.(Description,pvalue,Group)]
+GO.bp[grep('brain|development',Description)][,.(Description,pvalue,Group)]
+GO.bp[grep('Wnt|Notch|lood|vessel',Description)][,.(Description,pvalue,Group)]
+```
+
+```{r}
+overlaped_terms = intersect(IBD.bp$Description, hCO.bp$Description)
+overlaped_terms
+```
+
+```{r}
+IBD.cc = as.data.table(ego@result)[,Group:='IVD']
+hCO.cc = as.data.table(hCO.cc@result)[,Group:='hCO']
+```
+
+```{r}
+GO.cc = rbind(IBD.cc, hCO.cc)
+GO.cc
+GO.cc[grep('cellular response to hypoxia|glu',Description)][,.(Description,pvalue,Group)]
+GO.cc[grep('neuron projection|axonogenesis|synapse|focal adhesion',Description)][,.(Description,pvalue,Group)]
+GO.cc[grep('brain|development',Description)][,.(Description,pvalue,Group)]
+GO.cc[grep('Wnt|Notch',Description)][,.(Description,pvalue,Group)]
+```
+```{r}
+term2plot = Reduce(rbind, list(GO.cc[grep('neuron projection|axonogenesis|synapse|focal adhesion',Description)][-c(2,6)],
+                               GO.bp[grep('hypoxia|glu',Description)][c(4,5)],
+                               GO.bp[grep('neuron projection|axonogenesis|synapse',Description)][c(1:2,9:10)],
+                               GO.bp[grep('brain|development',Description)][c(3:4,8,10)],
+                               GO.bp[grep('Wnt|Notch|lood|vessel',Description)][1:2]))
+
+term2plot[grep('Wnt',Description)]$Description = 'Wnt signaling pathway'
+term2plot[,Description:=gsub(' to pyruvate','',Description)]
+term2plot[,Description:=gsub('regulation of ','',Description)]
+term2plot[,Description:=gsub('neuron fate commitment','development',Description)]
+
+term2plot[,logP:=-log10(pvalue)]
+term2plot
+overlaped_terms = term2plot[duplicated(Description)]$Description
+
+term2plot = term2plot[order(Group,logP)]
+term2plot[,Description:=factor(Description,levels = unique(term2plot$Description))]
+
+ggplot(term2plot[Description%in%overlaped_terms], aes(x=Description, y = logP,
+                    fill = Group))+
+  geom_bar(position = position_dodge(),stat="identity")+
+  my_theme + coord_flip() + theme(legend.position = 'top',legend.title = element_blank()) + 
+  labs(x = 'GO terms', y = '-log10(P)', title = '') 
+
+
+ggplot(term2plot[!Description%in%overlaped_terms], aes(x=Description, y = logP,
+                    fill = Group))+
+  geom_bar(position = position_dodge(),stat="identity")+
+  my_theme + coord_flip() + theme(legend.position = 'top',legend.title = element_blank()) + 
+  labs(x = 'GO terms', y = '-log10(P)', title = '') 
+```
+
+```{r}
+GO2out = rbind(GO.bp[,Ont:='BP'],GO.cc[,Ont:='CC'])
+
+fwrite(GO2out[order(Group,qvalue)], quote = F, sep = '\t', row.names = F,
+       file = '~/Project/Organoid/result/Integration/DEG/GO_enrichment_for_EN_DEGs_between_IVD_and_hCO.txt')
+```
+
+
+## For loop to compare IVD with published hCOs repspectively
+```{r,fig.height=7}
+common_genes = Reduce(intersect, list(rownames(Bhaduri.EN_mat),
+                                      rownames(IVD.EN_mat),
+                                      rownames(Giandomenico.EN_mat),
+                                      rownames(Velasco.EN_mat)))
+
+for(i in c('Bhaduri','Giandomenico','Madhavan','Velasco')){
+  print(i)
+  tmp = eval(parse(text = paste0(i,'.EN_mat')))
+  EN_mat = cbind(IVD.EN_mat[common_genes,], tmp[common_genes,])
+  
+  EN_obj = CreateSeuratObject(counts = EN_mat)
+
+meta =EN_obj@meta.data
+head(meta)
+meta$Source = 'hCO'
+meta[colnames(IVD.EN_mat),]$Source = 'IVD'
+table(meta$Source)
+EN_obj@meta.data = meta
+
+EN_DEG = FindMarkers(EN_obj, group.by = 'Source', ident.1 = 'IVD', ident.2 = 'hCO')
+head(EN_DEG)
+EN_DEG = setDT(tibble::rownames_to_column(EN_DEG, var = 'gene_name'))[p_val_adj<0.05]
+EN_DEG[,Group:=ifelse(avg_logFC>0,'IVD',paste0('hCO (',i,')'))]
+table(EN_DEG$Group)
+
+EN_DEG[,ENTREZ_ID:=mapIds(org.Hs.eg.db, keys = gene_name, keytype = 'SYMBOL', column = 'ENTREZID')]
+
+ego <- enrichGO(gene          = EN_DEG[Group=='IVD']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "CC",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+ego = simplify(ego)
+length(ego@result$Description)
+
+cc = dotplot(ego, showCategory = 31,title='GO (CC) in IVD') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+ego.bp <- enrichGO(gene          = EN_DEG[Group=='IVD']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+ego.bp = simplify(ego.bp)
+length(ego.bp@result$Description)
+
+bp = dotplot(ego.bp, showCategory = 30,title='GO (BP) in IVD') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+
+ego.mf <- enrichGO(gene          = EN_DEG[Group=='IVD']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+ego.mf = simplify(ego.mf)
+length(ego.mf@result$Description)
+
+mf = dotplot(ego.mf, showCategory = 3,title='GO (MF) in IVD') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+print(bp)
+print(mf)
+print(cc)
+
+
+hCO.cc <- enrichGO(gene          = EN_DEG[Group!='IVD']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "CC",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,
+        readable      = TRUE)
+
+hCO.cc = simplify(hCO.cc)
+length(hCO.cc@result$Description)
+
+cc = dotplot(hCO.cc, showCategory = 31,title=paste0('GO (CC) in ',i)) +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+hCO.bp <- enrichGO(gene          = EN_DEG[Group!='IVD']$ENTREZ_ID,
+                
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+        readable      = TRUE)
+
+hCO.bp = simplify(hCO.bp)
+length(hCO.bp@result$Description)
+
+bp = dotplot(hCO.bp, showCategory = 30,title=paste0('GO (BP) in ',i)) +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+
+hCO.mf <- enrichGO(gene          = EN_DEG[Group!='IVD']$ENTREZ_ID,
+                
+                OrgDb         = org.Hs.eg.db,
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+        readable      = TRUE)
+
+hCO.mf = simplify(hCO.mf)
+length(hCO.mf@result$Description)
+
+mf = dotplot(hCO.mf, showCategory = 3,title=paste0('GO (MF) in ',i)) +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+print(bp)
+print(mf)
+print(cc)
+
+
+IBD.bp = as.data.table(ego.bp@result)[,Group:='IVD']
+hCO.bp = as.data.table(hCO.bp@result)[,Group:=paste0('hCO (',i,')')]
+
+
+GO.bp = rbind(IBD.bp, hCO.bp)
+
+fwrite(GO.bp[order(Group,qvalue)], quote = F, sep = '\t', row.names = F,
+       file = paste0('~/Project/Organoid/result/Integration/DEG/GO_enrichment_for_EN_DEGs_between_IVD_and_',i,'_hCO.txt'))
+
+}
+```
+
+
+
+### GSEA for EN DEGs
+```{r}
+geneFC = EN_DEG[order(-avg_logFC)]$avg_logFC
+
+names(geneFC) = EN_DEG[order(-avg_logFC)]$gene_name
+
+diff_gene_ID = clusterProfiler::bitr(EN_DEG$gene_name,
+                                     fromType = 'SYMBOL',
+                                     toType = 'ENTREZID',
+                                     OrgDb = 'org.Hs.eg.db')
+
+geneFC = geneFC[diff_gene_ID$SYMBOL]
+names(geneFC) = diff_gene_ID$ENTREZID
+geneFC = sort(geneFC, decreasing = T)
+length(geneFC)
+```
+
+```{r,fig.width=10,fig.height=7.5}
+gsea.go <- gseGO(geneList = geneFC,
+              OrgDb        = org.Hs.eg.db,
+              ont          = "ALL",
+              nPerm        = 1000,
+              minGSSize    = 20,
+              maxGSSize    = 500,
+              pvalueCutoff = 0.1,
+              verbose      = FALSE)
+
+gsea.go
+
+ridgeplot(gsea.go)
+
+
+gsea.kegg <- gseKEGG(geneList = geneFC,
+               organism     = 'hsa',
+               nPerm        = 1000,
+               minGSSize    = 20,
+               pvalueCutoff = 0.1,
+               verbose      = FALSE)
+
+gsea.kegg
+
+ridgeplot(gsea.kegg)
+```
+
+```{r}
+go_df = gsea.go@result
+head(go_df)
+
+go_df[grep('cell',go_df$Description),]
+
+summary(go_df$NES)
+
+
+
+toplot = go_df[grep('cell',go_df$Description),]
+toplot
+
+for(i in c(2,3,4,6,7,8)){
+  print(gseaplot(gsea.go, geneSetID = toplot$ID[i], by = "runningScore",
+         title = toplot$Description[i])+my_theme)
+}
+
+```
+
+
+## hall mark enrichment
+### obtain hallmark terms
+```{r}
+library(clusterProfiler)
+library(DOSE)
+library(msigdbr)
+m_df <- msigdbr(species = "Homo sapiens")
+head(m_df, 6) %>% as.data.frame
+
+m_t2g <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::select(gs_name, entrez_gene,gene_symbol)
+head(m_t2g)
+unique(m_t2g$gs_name)
+```
+
+
+
+
+### GSEA of hallmark
+```{r,fig.width=10,fig.height=5}
+### pvalue of apoptosis is 0.06
+hall_KD <- GSEA(geneFC, TERM2GENE = m_t2g, 
+            pvalueCutoff = 0.2)
+
+KD_df = as.data.table(hall_KD@result)
+KD_df[pvalue<0.05,.(ID,NES,pvalue,p.adjust)][order(NES)]
+
+#hall_KD <- setReadable(hall_KD, org.Hs.eg.db, keyType = "ENTREZID")
+
+KD.P = ridgeplot(hall_KD, showCategory = 22, fill = 'pvalue') + my_theme + 
+        theme(title = element_text(hjust = 0.05,size=18),
+               axis.text.x = element_text(size=16),
+               axis.text.y = element_text(size=16))+
+          labs(title = paste0('GSEA for DEGs after knocking down DYRK2'))
+
+KD.P
+```
+
+```{r,fig.height=7}
+common_genes = Reduce(intersect, list(rownames(Bhaduri.RG_mat),
+                                      rownames(IVD.RG_mat),
+                                      rownames(Giandomenico.RG_mat),
+                                      rownames(Velasco.RG_mat)))
+
+for(i in c('Bhaduri','Giandomenico','Velasco')){
+  print(i)
+  tmp = eval(parse(text = paste0(i,'.RG_mat')))
+  RG_mat = cbind(IVD.RG_mat[common_genes,], tmp[common_genes,])
+  
+  RG_obj = CreateSeuratObject(counts = RG_mat)
+
+meta =RG_obj@meta.data
+head(meta)
+meta$Source = 'hCO'
+meta[colnames(IVD.RG_mat),]$Source = 'IVD'
+table(meta$Source)
+RG_obj@meta.data = meta
+
+RG_DEG = FindMarkers(RG_obj, group.by = 'Source', ident.1 = 'IVD', ident.2 = 'hCO')
+head(RG_DEG)
+RG_DEG = setDT(tibble::rownames_to_column(RG_DEG, var = 'gene_name'))[p_val_adj<0.05]
+RG_DEG[,Group:=ifelse(avg_logFC>0,'IVD',paste0('hCO (',i,')'))]
+table(RG_DEG$Group)
+
+RG_DEG[,ENTREZ_ID:=mapIds(org.Hs.eg.db, keys = gene_name, keytype = 'SYMBOL', column = 'ENTREZID')]
+
+ego <- enrichGO(gene          = RG_DEG[Group=='IVD']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "CC",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+ego = simplify(ego)
+length(ego@result$Description)
+
+cc = dotplot(ego, showCategory = 31,title='GO (CC) in IVD') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+ego.bp <- enrichGO(gene          = RG_DEG[Group=='IVD']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+ego.bp = simplify(ego.bp)
+length(ego.bp@result$Description)
+
+bp = dotplot(ego.bp, showCategory = 30,title='GO (BP) in IVD') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+
+ego.mf <- enrichGO(gene          = RG_DEG[Group=='IVD']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+ego.mf = simplify(ego.mf)
+length(ego.mf@result$Description)
+
+mf = dotplot(ego.mf, showCategory = 3,title='GO (MF) in IVD') +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+print(bp)
+print(mf)
+print(cc)
+
+
+hCO.cc <- enrichGO(gene          = RG_DEG[Group!='IVD']$ENTREZ_ID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "CC",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,
+        readable      = TRUE)
+
+hCO.cc = simplify(hCO.cc)
+length(hCO.cc@result$Description)
+
+cc = dotplot(hCO.cc, showCategory = 31,title=paste0('GO (CC) in ',i)) +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+hCO.bp <- enrichGO(gene          = RG_DEG[Group!='IVD']$ENTREZ_ID,
+                
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+        readable      = TRUE)
+
+hCO.bp = simplify(hCO.bp)
+length(hCO.bp@result$Description)
+
+bp = dotplot(hCO.bp, showCategory = 30,title=paste0('GO (BP) in ',i)) +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+
+
+hCO.mf <- enrichGO(gene          = RG_DEG[Group!='IVD']$ENTREZ_ID,
+                
+                OrgDb         = org.Hs.eg.db,
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+        readable      = TRUE)
+
+hCO.mf = simplify(hCO.mf)
+length(hCO.mf@result$Description)
+
+mf = dotplot(hCO.mf, showCategory = 3,title=paste0('GO (MF) in ',i)) +theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=18),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15))
+
+print(bp)
+print(mf)
+print(cc)
+
+
+IBD.bp = as.data.table(ego.bp@result)[,Group:='IVD']
+hCO.bp = as.data.table(hCO.bp@result)[,Group:=paste0('hCO (',i,')')]
+
+
+GO.bp = rbind(IBD.bp, hCO.bp)
+
+fwrite(GO.bp[order(Group,qvalue)], quote = F, sep = '\t', row.names = F,
+       file = paste0('~/Project/Organoid/result/Integration/DEG/GO_enrichment_for_RG_DEGs_between_IVD_and_',i,'_hCO.txt'))
+
+}
+
+```
+
+
+
+
+
+
