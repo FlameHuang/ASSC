@@ -1,0 +1,59 @@
+#### find the host gene for AS events using ID------
+map_HostGene_for_ID<- function(sj, gtfFile, NT = 1){
+  # required package ------------------------
+  usePackage("data.table")
+  usePackage("parallel")
+  useBiocPackage('GenomicFeatures')
+  useBiocPackage('rtracklayer')
+
+  print(paste("Starting map host genes at ", Sys.time(), sep = ""))
+  if(!file.exists(gtfFile)) {
+    stop("The GTF file does not exist! And you should provide the GTF file you used in STAR alignment.")
+  }
+  #### contrust the database from GTF -----------
+  txdb <- GenomicFeatures::makeTxDbFromGFF(file = gtfFile, format = "gtf")
+  #### the intron regions to map gene id -------------
+  intron <- intronicParts(txdb, linked.to.single.gene.only = TRUE)
+  intron_tab <- as.data.table(intron)
+  intron_tab[, names:=as.character(intron)]
+
+   # gene id ---------------------------------
+  sj_tu <- unique(do.call(c, lapply(sj, function(x) unlist(strsplit(x, "@")))))
+  junc_tu <- as.data.table(data.frame(names = sj_tu,
+                                      chr = mapply(function(x) as.character(x[1]), strsplit(sj_tu, ":")),
+                                      start = mapply(function(x) as.integer(x[2]), strsplit(sj_tu, "[:-]")),
+                                      end = mapply(function(x) as.integer(x[3]), strsplit(sj_tu, "[:-]")),
+                                      strand = mapply(function(x) as.character(x[3]), strsplit(sj_tu, "[:]"))))
+  junc_tu <- merge(junc_tu, intron_tab[, .(names, gene_id)], by = "names", all.x = TRUE)
+
+  ### treat the junctions not mapped to intergenic (find the ranking genes) --------
+  tmp <- junc_tu[is.na(gene_id), ]
+  mclapply(seq_len(nrow(tmp)), function(i){
+    return(GRanges(seqnames = tmp[i, chr], ranges = IRanges(start = tmp[i, start], end = tmp[i, end]), strand = tmp[i, strand]))
+  }, mc.cores = NT) -> res_s
+
+  grl_s <- GRangesList(res_s); names(grl_s) <- tmp[, names]
+  res_s_gene <- mapRangesToIds(txdb, grl_s, "gene")
+  range_gene <- as.data.table(data.frame(gene_id = mcmapply(function(x) paste(x$gene_id, collapse = "|"), res_s_gene, mc.cores = NT)), keep.rownames = "junction")
+  tmp[range_gene$junction, ]$gene_id <- range_gene$gene_id
+
+  junc_tu_gene <- rbind(na.omit(junc_tu), tmp)
+  setkey(junc_tu_gene, names)
+
+  # gene_name -------------------------------
+  tu_gene_id <- as.list(junc_tu_gene$gene_id); names(tu_gene_id) <- junc_tu[, names]
+  gtf <- rtracklayer::readGFF(gtfFile)
+  gtf_infor <- as.data.table(gtf[gtf$type == "gene", c("gene_id", "gene_name")])
+  setkey(gtf_infor, gene_id)
+  junc_tu_gene$gene_name <- do.call(c, lapply(tu_gene_id, function(x) paste(gtf_infor[unlist(strsplit(x, "\\|")), gene_name], collapse = "|") ))
+
+  # add host gene ---------------------------
+  do.call(rbind, mclapply(sj, function(x) {
+    as.data.frame(t(apply(junc_tu_gene[unlist(strsplit(x, "@")), .(names, gene_id, gene_name)], 2, function(y) paste0(y, collapse = "@"))))
+  }, mc.cores = NT)) -> psi_id_gene
+  setDT(psi_id_gene, key = "names")
+  psi_id_gene[, names:=as.character(names)]
+  colnames(psi_id_gene)[1] = 'id'
+  print(paste("Finished at ", Sys.time(), sep = ""))
+  return(psi_id_gene)
+}
