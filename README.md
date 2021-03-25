@@ -11,7 +11,7 @@ devtools::install_github("FlameHuang/ASSC")
 ```
 ### in bash
 ```{bash}
-git clone --recursive git@github.com:FlameHuang/ASSC.git
+git clone --recursive git://github.com/FlameHuang/ASSC
 cd ASSC
 R CMD INSTALL .
 ```
