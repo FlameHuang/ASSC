@@ -1,5 +1,4 @@
-#### AS type of all AS sites ----------------
-
+### using GTF as reference index
 GTFIndex <- function(gtfFile, NT = 1){
   if(!file.exists(gtfFile)) {
     stop("The GTF file does not exist! And you should provide the GTF file you used in STAR alignment.")
@@ -37,8 +36,18 @@ GTFIndex <- function(gtfFile, NT = 1){
 }
 
 
-
-AStype <- function(cell.psi, indexedGTF, NT = 1){
+#### Classifying all AS type based on filtered AS sites ----------------
+#### optimization of identifying alternative the first exon (AFE) ---------
+#tandem first exon (with different length)
+#A5SS & AFE in + strand
+#A3SS & AFE in - strand
+####The canonical AFE:
+#### the alternative exon are located in different transcripts from the sam gene
+#### map the first exon's end with junction (+);  the first exon's start with junction (-)
+identify_AStype <- function(cell.psi, sj_list, indexedGTF, NT = 1){
+  ### cell_psi: the result table from betabinomial test
+  ### sj_list: the list of AS junctions
+  ### indexedGTF: index files' list from GTF
   # required package ------------------------
   usePackage("data.table")
   usePackage("parallel")
@@ -71,22 +80,32 @@ AStype <- function(cell.psi, indexedGTF, NT = 1){
   MXE <- start_end_match[start < end1 & end1 < start2 & start2 < end2 & end2 < start1 & start1 < end, ]
   MXE_junc <- unique(c(MXE[[1]], MXE[[7]]))
 
-  # AF/LE -----------------------------------
+  # AF/LE (special we need use sj_list)-----------------------------------
   first_intron_tab <- indexedGTF$first_intron_tab
   last_intron_tab <- indexedGTF$last_intron_tab
-  junc_as_a <- as.list(cell.psi[, as.character(id)])
-  afle_index <- mcmapply(junc_as_a, FUN = function(x){
-    if(sum(unlist(strsplit(x, "@")) %in% first_intron_tab[, junc]) > 0 ){
-      res = "AFE"
-    } else if (sum(unlist(strsplit(x, "@")) %in% last_intron_tab[, junc]) > 0 ) {
+  first_exon_tab <- indexedGTF$first_exon_tab
+  afle_index <- mcmapply(sj_list, FUN = function(x){
+    if(sum(x$names %in% first_intron_tab[, junc]) > 0 ){
+      res = "Pseudo_AFE"
+      if(sum(x$first_boundary %in% first_exon_tab$exon_boundary)>1){
+        if(x$strand == '+' & x$share == 'same_end'){
+          res = 'Real_AFE'
+        }
+        if(x$strand == '-' & x$share == 'same_start') {
+          res = 'Real_AFE'
+        }
+      }
+    } else if (sum(x$names %in% last_intron_tab[, junc]) > 0 ) {
       res = "ALE"
     } else {
       res = "Non"
     }
     return(res)
   }, mc.cores = NT)
-  AFE_junc <- cell.psi[, as.character(id)][which(afle_index == "AFE")]
-  ALE_junc <- cell.psi[, as.character(id)][which(afle_index == "ALE")]
+  #AFE_junc <- cell.psi[, as.character(id)][grep('AFE',afle_index)]
+  R_AFE_junc <- cell.psi[id%in%names(afle_index[afle_index == "Real_AFE"]), as.character(id)]
+  P_AFE_junc <- cell.psi[id%in%names(afle_index[afle_index == "Pseudo_AFE"]), as.character(id)]
+  ALE_junc <- cell.psi[id%in%names(afle_index[afle_index == "ALE"]), as.character(id)]
 
 
   # A3/5SS ----------------------------------
@@ -107,7 +126,8 @@ AStype <- function(cell.psi, indexedGTF, NT = 1){
   A3SS_junc <- unique(c(same_start_ass[strand == "+", names], same_end_ass[strand == "-", names]))
   A5SS_junc <- unique(c(same_start_ass[strand == "-", names], same_end_ass[strand == "+", names]))
 
-  AS_list <- list(SE = SE_junc, A3SS = A3SS_junc, A5SS = A5SS_junc, AFE = AFE_junc, ALE = ALE_junc, MXE = MXE_junc)
+  AS_list <- list(SE = SE_junc, A3SS = A3SS_junc, A5SS = A5SS_junc,
+                  Real_AFE = R_AFE_junc, Pseudo_AFE = P_AFE_junc, ALE = ALE_junc, MXE = MXE_junc)
 
   # Add AS type ------------------------
   as.type <-  function(x) {
@@ -119,5 +139,9 @@ AStype <- function(cell.psi, indexedGTF, NT = 1){
     return(AS)
   }
   cell.psi[!is.na(event), AS:=mcmapply(as.type, cell.psi[!is.na(event), id], mc.cores = NT)]
+  ### assign #A5SS & AFE in + and A3SS & AFE in - to tandem AFE
+
+  cell.psi[grep('+',id)][AS=='A5SS|Real_AFE']$AS = 'Tandem_AFE'
+  cell.psi[grep('+',id,invert = T)][AS=='A3SS|Real_AFE']$AS = 'Tandem_AFE'
   return(cell.psi)
 }
